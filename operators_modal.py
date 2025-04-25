@@ -12,7 +12,7 @@ from .functions_tools import *
 
 class ABN_OT_normal_editor_modal(Operator):
     bl_idname = "abnormal.normal_editor_modal"
-    bl_label = "Start Normal Editor"
+    bl_label = "开始法线编辑"
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}
 
     def modal(self, context, event):
@@ -34,6 +34,29 @@ class ABN_OT_normal_editor_modal(Operator):
             self._modal_running = True
             return status
 
+        # 获取到视图相机的位置和旋转角度
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                for space in area.spaces:
+                    if space.type == 'VIEW_3D' and space.region_3d.view_perspective == 'PERSP':
+                        # 拿到镜头焦距
+                        lens = space.lens
+                        # 计算水平FOV
+                        sensor_width = 36.0  # 自由视角下，默认全画幅传感器宽度
+                        fov = 2 * math.atan(sensor_width / (2 * lens))
+                        # 拿到相机矩阵
+                        view_matrix = space.region_3d.view_matrix
+
+        # 将fov写入到每个顶点数据的CustomAttribute中
+        mesh = self._object.data
+        fov_attr = mesh.attributes.get('fov') or mesh.attributes.new(name='fov', type='FLOAT', domain='POINT')
+        pos_vs_z_attr = mesh.attributes.get('pos_vs_z') or mesh.attributes.new(name='pos_vs_z', type='FLOAT', domain='POINT')
+        for vert in mesh.vertices:
+            fov_attr.data[vert.index].value = fov
+            world_pos = self._object.matrix_world @ vert.co
+            view_pos = view_matrix @ world_pos
+            pos_vs_z_attr.data[vert.index].value = view_pos.z
+
         self._mouse_abs_loc[:] = [event.mouse_x, event.mouse_y, 0.0]
         self._mouse_reg_loc[:] = [
             event.mouse_region_x, event.mouse_region_y, 0.0]
@@ -54,9 +77,11 @@ class ABN_OT_normal_editor_modal(Operator):
 
             self._prev_mouse_loc[:] = self._mouse_reg_loc
 
+        # 确认修改法线
         if self._confirm_modal:
             finish_modal(self, False)
             status = {"FINISHED"}
+        # 取消修改法线
         elif self._cancel_modal:
             finish_modal(self, True)
             status = {"CANCELLED"}
@@ -151,6 +176,10 @@ class ABN_OT_normal_editor_modal(Operator):
         self._x_ray_mode = False
         self._use_gizmo = self._behavior_prefs.rotate_gizmo_use
         self._gizmo_size = self._display_prefs.gizmo_size
+
+        self._outline_scale = self._display_prefs.outline_scale
+        self._z_offset = self._display_prefs.z_offset
+
         self._normal_size = self._display_prefs.normal_size
         self._line_brightness = self._display_prefs.line_brightness
         self._point_size = self._display_prefs.point_size
@@ -165,6 +194,10 @@ class ABN_OT_normal_editor_modal(Operator):
             self._ui_scale = self._display_prefs.ui_scale
         self.prev_view = context.region_data.view_matrix.copy()
 
+        # 测试添加自定义参数
+        self._outline_scale = self._display_prefs.outline_scale
+        self._z_offset = self._display_prefs.z_offset
+        
         # CACHE VIEWPORT SETTINGS
         viewport_change_cache(self, context)
 
@@ -226,8 +259,13 @@ class ABN_OT_normal_editor_modal(Operator):
 
         self._container = ABNContainer(
             self._object.matrix_world.normalized(), alt_shader=self._behavior_prefs.alt_drawing)
+
         self._container.set_scale_selection(self._selected_scale)
         self._container.set_brightess(self._line_brightness)
+
+        self._container.set_outine_scale(self._outline_scale)
+        self._container.set_z_offset(self._z_offset)
+
         self._container.set_normal_scale(self._normal_size)
         self._container.set_point_size(self._point_size)
         self._container.set_loop_scale(self._loop_tri_size)
@@ -256,12 +294,16 @@ class ABN_OT_normal_editor_modal(Operator):
 
         # SETUP BATCHES
         self._container.clear_batches()
+
+        # 更新数据
         refresh_batches(self, context)
 
         # OPENGL DRAWING HANDLER
         args = (self, context)
         self._draw_handle_2d = bpy.types.SpaceView3D.draw_handler_add(
             draw_callback_2d, args, "WINDOW", "POST_PIXEL")
+        
+        # 绘制法线，顶点等
         self._draw_handle_3d = bpy.types.SpaceView3D.draw_handler_add(
             draw_callback_3d, args, "WINDOW", "POST_VIEW")
 

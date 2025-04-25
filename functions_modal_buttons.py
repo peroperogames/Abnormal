@@ -2,11 +2,17 @@ import bpy
 from .functions_modal import *
 from .cui_classes.cui_window import *
 
-
+# UI界面绘制的方法
 def init_ui_panels(modal, rw, rh, scale):
     modal._window = CUIWindowContainer(modal, bpy.context, scale)
-    modal._window.set_style_color(color_panel=(0.0, 0.0, 0.1, 0.2), color_box=(0.0, 0.0, 0.1, 0.8), color_row=(
-        0.0, 0.0, 0.2, 1.0), color_item=(0.0, 0.0, 0.2, 1.0), color_hover=(0.0, 0.0, 0.37, 1.0), color_click=(0.0, 0.0, 0.5, 1.0))
+    # UI界面控件颜色控制
+    modal._window.set_style_color(
+        color_panel=(0.0, 0.0, 0.1, 0.2), 
+        color_box=(0.0, 0.0, 0.1, 0.8), 
+        color_row=(0.0, 0.0, 0.2, 1.0), 
+        color_item=(0.0, 0.0, 0.2, 1.0), 
+        color_hover=(0.0, 0.0, 0.37, 1.0), 
+        color_click=(0.0, 0.0, 0.5, 1.0))
 
     modal._window.set_status_offset([25, 10])
     modal._window.set_key_offset([25, 10])
@@ -172,6 +178,7 @@ def init_ui_panels(modal, rw, rh, scale):
             20, 'Sphereize Strength', modal.target_strength, 2, .01, .01, 1.0)
         modal.sphere_strength.set_slide_factor(2)
         modal.sphere_strength.set_value_change_func(change_sphereize_strength)
+
 
     #
     #
@@ -624,8 +631,7 @@ def init_ui_panels(modal, rw, rh, scale):
             [rw-25, rh-75], 250)
         modal._export_panel.set_separation(8)
         modal._export_panel.set_horizontal_alignment('RIGHT')
-        modal._export_panel.add_header(
-            True, 'Addon Settings', 30, False)
+        modal._export_panel.add_header(True, '插件设置', 30, False)
         modal._export_panel.set_header_font_size(20)
         modal._export_panel.set_height_min_max(
             max=modal.act_reg.height*0.95)
@@ -633,18 +639,17 @@ def init_ui_panels(modal, rw, rh, scale):
 
         box = modal._export_panel.add_box()
         row = box.add_row()
-        but = row.add_button(20, 'Confirm Changes')
+        but = row.add_button(20, '确认更改')
         but.set_custom_id([0])
         but.set_click_up_func(end_modal)
 
-        but = row.add_button(20, 'Cancel Changes')
+        but = row.add_button(20, '取消更改')
         but.set_custom_id([1])
         but.set_click_up_func(end_modal)
 
         box = modal._export_panel.add_box()
         row = box.add_row()
-        hbut = row.add_hover_button(30,
-                                    'Viewport Settings')
+        hbut = row.add_hover_button(30, '视口设置')
         hbut.set_click_up_func(toggle_display_button)
         hbut.set_hover_down_func(display_panel_show)
         hbut.set_font_size(16)
@@ -702,8 +707,7 @@ def init_ui_panels(modal, rw, rh, scale):
             num.set_value_change_func(change_loop_tri_size)
 
             row = boxx.add_row()
-            bool = row.add_bool(20, 'Display Wireframe',
-                                default=modal._use_wireframe_overlay)
+            bool = row.add_bool(20, 'Display Wireframe',default=modal._use_wireframe_overlay)
             bool.set_click_up_func(toggle_wireframe)
 
             row = boxx.add_row()
@@ -713,10 +717,22 @@ def init_ui_panels(modal, rw, rh, scale):
             num.set_value_change_func(change_gizmo_size)
 
             row = boxx.add_row()
-            num = row.add_number(
-                20, 'UI Scale', modal._ui_scale, 2, .1, 0.5, 3.0)
+            num = row.add_number(20, 'UI Scale', modal._ui_scale, 2, .1, 0.5, 3.0)
             num.set_slide_factor(2)
             num.set_value_change_func(change_ui_scale)
+
+            # # 编写用于存储描边粗细数据的参数
+            # row = boxx.add_row()
+            # num = row.add_number(20, 'Outline Scale', modal._outline_scale, 2, 0, 0, 1.0)
+            # num.set_slide_factor(2)
+            # # 在调整这个参数的时候，把这个值写入到顶点数据中
+            # num.set_value_change_func(change_outline_scale)
+
+            # # z偏移数据写入
+            # row = boxx.add_row()
+            # num = row.add_number(20, 'Z_Offset', modal._z_offset, 2, 0, -1.0, 1.0)
+            # num.set_slide_factor(2)
+            # num.set_value_change_func(change_z_offset_value)
 
             row = boxx.add_row()
             but = row.add_button(20, 'Save Addon Preferences')
@@ -724,8 +740,41 @@ def init_ui_panels(modal, rw, rh, scale):
 
             modal._display_box = boxx
 
+        ###############################################################################
+
+        # 自定义描边参数添加
         box = modal._export_panel.add_box()
-        box.add_header(True, 'Keymap', 20, False)
+        row = box.add_row()
+        hbut02 = row.add_hover_button(30, '描边设置')
+        hbut02.set_click_up_func(toggle_stroke_button)
+        # hbut02.set_hover_down_func(stroke_panel_show)
+        hbut02.set_font_size(16)
+        hbut02.set_bool(not modal._display_prefs.stroke_collapsed)
+        hbut02.set_draw_box(not hbut02.bool)
+
+        # modal._display_panel.set_hover_ref(row)
+
+        if True:
+            boxx = box.add_box()
+            boxx.set_visibility(not modal._display_prefs.stroke_collapsed)
+
+            # 描边参数
+            row = boxx.add_row()
+            num = row.add_number(20, 'Outline Scale', modal._outline_scale, 2, 0, 0, 1.0)
+            num.set_slide_factor(2)
+            num.set_value_change_func(change_outline_scale)
+
+            row = boxx.add_row()
+            num = row.add_number(20, 'Z_Offset', modal._z_offset, 2, 0, -1.0, 1.0)
+            num.set_slide_factor(2)
+            num.set_value_change_func(change_z_offset_value)
+
+            modal._stroke_box = boxx
+
+        ###############################################################################
+
+        box = modal._export_panel.add_box()
+        box.add_header(True, '快捷键', 20, False)
         box.set_header_font_size(14)
         box.set_collapsed(True)
         modal._keymap_box = box.add_box()
@@ -753,7 +802,7 @@ def init_ui_panels(modal, rw, rh, scale):
         box = modal._tools_panel.add_box()
 
         row = box.add_row()
-        bool = row.add_bool(20, 'Edit Individual Loop Normals',
+        bool = row.add_bool(20, '编辑单个环路法线',
                             default=modal._individual_loops)
         bool.set_click_up_func(toggle_individual_loops)
         bool.add_tooltip_text_line(
@@ -766,7 +815,7 @@ def init_ui_panels(modal, rw, rh, scale):
         box = modal._tools_panel.add_box()
         row = box.add_row()
         hbut = row.add_hover_button(30,
-                                    'Symmetry')
+                                    '对称性')
         hbut.set_click_up_func(toggle_symmetry_button)
         hbut.set_hover_down_func(symmetry_panel_show)
         hbut.set_font_size(16)
@@ -842,7 +891,7 @@ def init_ui_panels(modal, rw, rh, scale):
         box = modal._tools_panel.add_box()
         row = box.add_row()
         hbut = row.add_hover_button(30,
-                                    'Axis Alignment')
+                                    '轴对齐')
         hbut.set_click_up_func(toggle_alignment_button)
         hbut.set_hover_down_func(alignment_panel_show)
         hbut.set_font_size(16)
@@ -933,7 +982,7 @@ def init_ui_panels(modal, rw, rh, scale):
         box = modal._tools_panel.add_box()
         row = box.add_row()
         hbut = row.add_hover_button(30,
-                                    'Normal Direction')
+                                    '法线方向')
         hbut.set_click_up_func(toggle_direction_button)
         hbut.set_hover_down_func(direction_panel_show)
         hbut.set_font_size(16)
@@ -988,7 +1037,7 @@ def init_ui_panels(modal, rw, rh, scale):
         box = modal._tools_panel.add_box()
         row = box.add_row()
         hbut = row.add_hover_button(30,
-                                    'Modify Normals')
+                                    '法线修改')
         hbut.set_click_up_func(toggle_modify_button)
         hbut.set_hover_down_func(modify_panel_show)
         hbut.set_font_size(16)
@@ -1061,7 +1110,7 @@ def init_ui_panels(modal, rw, rh, scale):
         box = modal._tools_panel.add_box()
         row = box.add_row()
         hbut = row.add_hover_button(30,
-                                    'Filter Settings')
+                                    '滤波设置')
         hbut.set_click_up_func(toggle_filter_button)
         hbut.set_hover_down_func(filter_panel_show)
         hbut.set_font_size(16)
@@ -1101,7 +1150,7 @@ def init_ui_panels(modal, rw, rh, scale):
         box = modal._tools_panel.add_box()
         row = box.add_row()
         hbut = row.add_hover_button(30,
-                                    'Copy/Paste Normals')
+                                    '复制/粘贴 法线')
         hbut.set_click_up_func(toggle_copy_button)
         hbut.set_hover_down_func(copy_panel_show)
         hbut.set_font_size(16)
@@ -1138,8 +1187,7 @@ def init_ui_panels(modal, rw, rh, scale):
 
         box = modal._tools_panel.add_box()
         row = box.add_row()
-        hbut = row.add_hover_button(30,
-                                    'Normal Target Modes')
+        hbut = row.add_hover_button(30, '法线朝向模式')
         hbut.set_click_up_func(toggle_modes_button)
         hbut.set_hover_down_func(modes_panel_show)
         hbut.set_font_size(16)
@@ -1165,17 +1213,86 @@ def init_ui_panels(modal, rw, rh, scale):
 
             modal._modes_box = boxx
 
+    # 这里要初始化上描边参数，防止第一次编辑的时候不会加载生成出来描边
+    print("初始会描边参数")
+    
+    # 确保CustomOutline和Z_Offset属性存在，并初始化值
+    obj = modal._object
+
+    # 处理CustomOutline属性
+    outline_attr = obj.data.attributes.get("CustomOutline")
+    if not outline_attr:
+        outline_attr = obj.data.attributes.new(name="CustomOutline", type='FLOAT', domain='CORNER')
+        # 将所有顶点的值设置为当前modal._outline_scale
+        for data in outline_attr.data:
+            data.value = modal._outline_scale
+
     modal._window.set_scale(modal._ui_scale)
     modal._window.create_shape_data()
     return
 
 
-#
-#
-#
-
-
 # BUTTON FUNCTIONS
+
+# 最好在初始化的时候就执行一次这些方法给上一个初始值
+# 添加描边宽度参数
+def change_outline_scale(ui_item, arguments):
+    # 实时传递outline_scale参数
+    arguments[0]._outline_scale = ui_item.value
+    # 尝试获取到名为CustomOutline的自定义参数
+    outlineAttr = arguments[0]._object.data.attributes.get("CustomOutline")
+    # 若不存在则新建
+    if not outlineAttr:
+        outlineAttr = arguments[0]._object.data.attributes.new(name="CustomOutline", type='FLOAT', domain='CORNER')
+
+    uv_layer_custom = arguments[0]._object.data.uv_layers.get("UV_Custom")
+    if not uv_layer_custom:
+        uv_layer_custom = arguments[0]._object.data.uv_layers.new(name = "UV_Custom")
+
+    # 在这里获取获取到描边宽度和z偏移分量数据存储到这个第二套uv数据中
+
+    # 获取到选中的顶点数据
+    sel_pos = get_selected_loops(arguments[0])
+
+    for loop in sel_pos:
+        outlineAttr.data[loop].value = ui_item.value
+
+        # 写入第二套UV的x分量（映射到0~1范围）
+        # 注意：UV坐标需要归一化，这里假设ui_item.value已经在0~1范围
+        # 如果值超出范围，可以添加 clamp(0.0, 1.0) 限制
+        current_uv = uv_layer_custom.data[loop].uv
+        uv_layer_custom.data[loop].uv = (ui_item.value, current_uv.y)
+
+    return
+
+# 添加z偏移参数
+def change_z_offset_value(ui_item, arguments):
+    # 实时传递outline_scale参数
+    arguments[0]._z_offset = ui_item.value
+    zOffsetAttr = arguments[0]._object.data.attributes.get("Z_Offset")
+    if not zOffsetAttr:
+        zOffsetAttr = arguments[0]._object.data.attributes.new(name="Z_Offset", type='FLOAT', domain='CORNER')
+
+    # 判断是否创建出了第二套uv数据
+    uv_layer_custom = arguments[0]._object.data.uv_layers.get("UV_Custom")
+    if not uv_layer_custom:
+        uv_layer_custom = arguments[0]._object.data.uv_layers.new(name = "UV_Custom")
+
+    # 获取到选中的顶点数据
+    sel_pos = get_selected_loops(arguments[0])
+
+    for loop in sel_pos:
+        zOffsetAttr.data[loop].value = ui_item.value
+
+        # 写入第二套UV的y分量（映射到0~1范围）
+        # 注意：UV坐标需要归一化，这里假设ui_item.value已经在0~1范围
+        # 如果值超出范围，可以添加 clamp(0.0, 1.0) 限制
+        current_uv = uv_layer_custom.data[loop].uv
+        uv_layer_custom.data[loop].uv = (current_uv.x, ui_item.value)
+
+    return
+
+
 def change_ui_scale(ui_item, arguments):
     arguments[0]._ui_scale = ui_item.value
 
@@ -1203,6 +1320,7 @@ def change_loop_tri_size(ui_item, arguments):
     arguments[0]._container.set_loop_scale(
         arguments[0]._loop_tri_size)
     arguments[0].redraw = True
+    
     return
 
 
@@ -1393,6 +1511,29 @@ def toggle_display_button(ui_item, arguments):
 
     arguments[0]._export_panel.create_shape_data()
     return
+
+# 自定义参数展示方法
+def toggle_stroke_button(ui_item, arguments):
+    arguments[0]._stroke_box.set_visibility(
+        not arguments[0]._stroke_box.visible)
+    
+    ui_item.set_bool(not ui_item.bool)
+    ui_item.set_draw_box(not ui_item.bool)
+    if arguments[0]._stroke_box.visible == False:
+        repos_subpanel(arguments[0]._display_panel, ui_item, arguments[0])
+    else:
+        arguments[0]._display_panel.set_visibility(False)
+    
+    arguments[0]._export_panel.create_shape_data()
+    return
+
+def stroke_panel_show(ui_item, arguments):
+    if ui_item.bool == False:
+        repos_subpanel(arguments[0]._display_panel, ui_item, arguments[0])
+    else:
+        arguments[0]._display_panel.set_visibility(False)
+    return
+
 
 
 def display_panel_show(ui_item, arguments):
@@ -1755,6 +1896,10 @@ def save_preferences(ui_item, arguments):
     arguments[0]._behavior_prefs.individual_loops = arguments[0]._individual_loops
     arguments[0]._behavior_prefs.rotate_gizmo_use = arguments[0]._use_gizmo
 
+    # 自定义数据存储
+    arguments[0]._display_prefs.outline_scale = arguments[0]._outline_scale
+    arguments[0]._display_prefs.z_offset = arguments[0]._z_offset
+
     arguments[0]._display_prefs.gizmo_size = arguments[0]._gizmo_size
     arguments[0]._display_prefs.normal_size = arguments[0]._normal_size
     arguments[0]._display_prefs.line_brightness = arguments[0]._line_brightness
@@ -1773,6 +1918,8 @@ def save_preferences(ui_item, arguments):
     arguments[0]._display_prefs.modify_collapsed = not arguments[0]._modify_box.visible
     arguments[0]._display_prefs.copy_collapsed = not arguments[0]._copy_box.visible
     arguments[0]._display_prefs.modes_collapsed = not arguments[0]._modes_box.visible
+
+    arguments[0]._display_prefs.stroke_collapsed = not arguments[0]._stroke_box.visible
 
     bpy.ops.wm.save_userpref()
     return
