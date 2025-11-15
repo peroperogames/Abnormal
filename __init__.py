@@ -3,13 +3,16 @@ from . import operators
 from . import properties
 from . import ui
 from . import keymap
+from . import classes
+from . import functions_modal
+from . import functions_tools
 from bpy.props import *
 
 bl_info = {
     "name": "Abnormal",
-    "author": "Cody Winchester (codywinch)",
-    "version": (1, 1, 5),
-    "blender": (4, 0, 0),
+    "author": "Cody Winchester (CodyWinch), Tyler Walker (BeyondDev)",
+    "version": (1, 1, 6),
+    "blender": (4, 5, 0),
     "location": "3D View > N Panel/Header > BNPR Abnormal Tab",
     "description": "BNPR Normal Editing Tools",
     "warning": "",
@@ -27,6 +30,12 @@ if "bpy" in locals():
         importlib.reload(keymap)
     if "properties" in locals():
         importlib.reload(properties)
+    if "classes" in locals():
+        importlib.reload(classes)
+    if "functions_modal" in locals():
+        importlib.reload(functions_modal)
+    if "functions_tools" in locals():
+        importlib.reload(functions_tools)
     if "operators_modal" in locals():
         importlib.reload(operators_modal)
     if "operators" in locals():

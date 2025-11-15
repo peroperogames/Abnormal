@@ -1,4 +1,5 @@
 import bpy
+import gpu
 from bpy.props import *
 from bpy.types import Operator
 # from .functions_general import *
@@ -218,7 +219,7 @@ class ABN_OT_normal_editor_modal(Operator):
         self._object_kd = ob_kd
 
         if bpy.app.version[0] < 4 or (bpy.app.version[0] == 4 and bpy.app.version[1] < 1):
-            if self._object.data.use_auto_smooth == False:
+            if not self._object.data.use_auto_smooth:
                 self._object.data.use_auto_smooth = True
                 self._object.data.auto_smooth_angle = 180
 
@@ -233,8 +234,15 @@ class ABN_OT_normal_editor_modal(Operator):
         self.shader_2d = gpu.shader.from_builtin(shader_2d_str)
         self.shader_3d = gpu.shader.from_builtin(shader_3d_str)
 
-        self._container = ABNContainer(
-            self._object.matrix_world.normalized(), alt_shader=self._behavior_prefs.alt_drawing)
+        try:
+            self._container = ABNContainer(
+                self._object.matrix_world.normalized(),
+                alt_shader=(self._behavior_prefs.alt_drawing or (hasattr(gpu, "platform") and gpu.platform.backend_type_get() == 'VULKAN')))
+        except Exception:
+            # Fallback to built-in shader path
+            self._container = ABNContainer(
+                self._object.matrix_world.normalized(),
+                alt_shader=True)
         self._container.set_scale_selection(self._selected_scale)
         self._container.set_brightess(self._line_brightness)
         self._container.set_normal_scale(self._normal_size)

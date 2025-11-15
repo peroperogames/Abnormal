@@ -1,5 +1,6 @@
 import bpy
 import gpu
+import gpu.platform
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 from .functions_general import *
@@ -9,11 +10,26 @@ class ABNContainer:
     def __init__(self, mat, alt_shader=False):
         self.alt_shader = alt_shader
 
-        if alt_shader:
+        # Force built-in shader path on Vulkan backend
+        try:
+            if hasattr(gpu, "platform") and gpu.platform.backend_type_get() == 'VULKAN':
+                self.alt_shader = True
+        except Exception:
+            pass
+
+        if self.alt_shader:
             self.create_alt_shader()
         else:
-            self.create_shader()
-            self.create_point_shader()
+            try:
+                ok = self.create_shader()
+                if ok:
+                    ok = self.create_point_shader()
+                if not ok:
+                    self.alt_shader = True
+                    self.create_alt_shader()
+            except Exception:
+                self.alt_shader = True
+                self.create_alt_shader()
 
         self.matrix = np.array(mat)
 
@@ -85,66 +101,78 @@ class ABNContainer:
         return
 
     def create_shader(self):
-        vertex_shader = '''
-            uniform mat4 viewProjectionMatrix;
+        try:
+            # Skip custom shader creation entirely on Vulkan
+            if gpu.platform.backend_type_get() == 'VULKAN':
+                return False
+            vert_out = gpu.types.GPUStageInterfaceInfo("abn_iface")
+            vert_out.smooth('VEC4', "rgba")
 
-            in vec3 pos;
-            in vec4 color;
-            out vec4 rgba;
+            shader_info = gpu.types.GPUShaderCreateInfo()
+            shader_info.push_constant('MAT4', "viewProjectionMatrix")
+            shader_info.push_constant('FLOAT', "brightness")
+            shader_info.vertex_in(0, 'VEC3', "pos")
+            shader_info.vertex_in(1, 'VEC4', "color")
+            shader_info.vertex_out(vert_out)
+            shader_info.fragment_out(0, 'VEC4', "FragColor")
 
-            void main()
-            {
-                rgba = color;
-                gl_Position = viewProjectionMatrix * vec4(pos, 1.0f);
-            }
-        '''
+            shader_info.vertex_source(
+                "void main()"
+                "{"
+                "  rgba = color;"
+                "  gl_Position = viewProjectionMatrix * vec4(pos, 1.0);"
+                "}"
+            )
 
-        fragment_shader = '''
-            uniform float brightness;
+            shader_info.fragment_source(
+                "void main()"
+                "{"
+                "  FragColor = vec4(rgba.xyz * brightness, rgba.a);"
+                "}"
+            )
 
-            in vec4 rgba;
-            layout(location = 0) out vec4 diffuseColor;
-
-            void main()
-            {
-                diffuseColor  = vec4(rgba.xyz * brightness, rgba.a);
-            }
-        '''
-
-        self.shader = gpu.types.GPUShader(vertex_shader, fragment_shader)
-        return
+            self.shader = gpu.shader.create_from_info(shader_info)
+            return True
+        except Exception:
+            return False
 
     def create_point_shader(self):
-        vertex_shader = '''
-            uniform mat4 viewProjectionMatrix;
+        try:
+            # Skip custom shader creation entirely on Vulkan
+            if gpu.platform.backend_type_get() == 'VULKAN':
+                return False
+            vert_out = gpu.types.GPUStageInterfaceInfo("abn_point_iface")
+            vert_out.smooth('VEC4', "rgba")
 
-            in float size;
-            in vec3 pos;
-            in vec4 color;
-            out vec4 rgba;
+            shader_info = gpu.types.GPUShaderCreateInfo()
+            shader_info.push_constant('MAT4', "viewProjectionMatrix")
+            shader_info.push_constant('FLOAT', "brightness")
+            shader_info.vertex_in(0, 'FLOAT', "size")
+            shader_info.vertex_in(1, 'VEC3', "pos")
+            shader_info.vertex_in(2, 'VEC4', "color")
+            shader_info.vertex_out(vert_out)
+            shader_info.fragment_out(0, 'VEC4', "FragColor")
 
-            void main()
-            {
-                rgba = color;
-                gl_PointSize = size;
-                gl_Position = viewProjectionMatrix * vec4(pos, 1.0f);
-            }
-        '''
+            shader_info.vertex_source(
+                "void main()"
+                "{"
+                "  rgba = color;"
+                "  gl_PointSize = size;"
+                "  gl_Position = viewProjectionMatrix * vec4(pos, 1.0);"
+                "}"
+            )
 
-        fragment_shader = '''
-            uniform float brightness;
+            shader_info.fragment_source(
+                "void main()"
+                "{"
+                "  FragColor = vec4(rgba.xyz * brightness, rgba.a);"
+                "}"
+            )
 
-            in vec4 rgba;
-            layout(location = 0) out vec4 diffuseColor;
-
-            void main()
-            {
-                diffuseColor  = vec4(rgba.xyz * brightness, rgba.a);
-            }
-        '''
-
-        self.point_shader = gpu.types.GPUShader(vertex_shader, fragment_shader)
-        return
+            self.point_shader = gpu.shader.create_from_info(shader_info)
+            return True
+        except Exception:
+            return False
 
     def clear_batches(self):
         if self.alt_shader:
@@ -179,51 +207,51 @@ class ABNContainer:
         filt_mask = self.filter_mask[self.sel_status]
         weight_mask = self.filter_weights[self.sel_status][filt_mask]
 
-        if self.scale_selection:
-            world_norms = po_cos + \
-                (po_norms * 0.666 * self.normal_scale) @ self.matrix[:3, :3].T
-            world_norms[act_status] = po_cos[act_status] + \
-                (po_norms[act_status] *
-                 self.normal_scale) @ self.matrix[:3, :3].T
+        if self.po_coords is not None and self.po_coords.shape[0] > 0:
+            bb_dims = np.ptp(self.po_coords, axis=0)
+            bb_edge = float(np.max(bb_dims))
+            scale_base = max(bb_edge * 0.1, 1e-6)
         else:
-            world_norms = po_cos + \
-                (po_norms * self.normal_scale) @ self.matrix[:3, :3].T
+            scale_base = 1.0
+        ns = self.normal_scale * scale_base
 
-        norm_lines = np.array(list(zip(po_cos, world_norms)))
-        norm_lines.shape = [po_cos.shape[0] * 2, 3]
+        rot_mat = self.matrix[:3, :3].T
+        if self.scale_selection:
+            world_norms = po_cos + (po_norms * (0.666 * ns)) @ rot_mat
+            world_norms[act_status] = po_cos[act_status] + (po_norms[act_status] * ns) @ rot_mat
+        else:
+            world_norms = po_cos + (po_norms * ns) @ rot_mat
 
-        #
+        norm_lines = np.empty((po_cos.shape[0] * 2, 3), dtype=np.float32)
+        norm_lines[0::2] = po_cos
+        norm_lines[1::2] = world_norms
 
-        cols = np.array([self.rcol_normal_sel] * po_cos.shape[0])
-        cols.shape = [po_cos.shape[0], 4]
+        cols = np.empty((po_cos.shape[0], 4), dtype=np.float32)
+        cols[:] = self.rcol_normal_sel
         cols[act_status] = self.rcol_normal_act
 
         # Draw filter weights on norms
         if self.draw_weights:
-            w_cols = np.zeros(filt_mask.nonzero()[0].size * 4,
-                              dtype=np.float32).reshape(-1, 4)
+            w_cols = np.zeros((filt_mask.nonzero()[0].size, 4), dtype=np.float32)
             f_cols = w_cols.copy()
-
             w_cols[:] = self.color_po_zero_weight
             f_cols[:] = self.color_po_full_weight
-
-            w_cols = w_cols * (1.0 - weight_mask.reshape(-1, 1)) + \
-                f_cols * weight_mask.reshape(-1, 1)
-
+            w_cols = w_cols * (1.0 - weight_mask.reshape(-1, 1)) + f_cols * weight_mask.reshape(-1, 1)
             w_cols = hsv_to_rgb_array(w_cols)
-
             cols[filt_mask] = w_cols
 
-        norm_colors = np.array(list(zip(cols, cols)))
-        norm_colors.shape = [po_cos.shape[0] * 2, 4]
+        norm_colors = np.empty((po_cos.shape[0] * 2, 4), dtype=np.float32)
+        norm_colors[0::2] = cols
+        norm_colors[1::2] = cols
 
         if self.alt_shader:
             norm_colors[:, [0, 1, 2]] *= self.brightness
 
-        #
-
-        self.batch_active_normal = batch_for_shader(
-            self.shader, 'LINES', {"pos": list(norm_lines), "color": list(norm_colors)})
+            self.batch_active_normal = batch_for_shader(
+                self.shader, 'LINES', {"pos": list(norm_lines), "color": list(norm_colors)})
+        else:
+            self.batch_active_normal = batch_for_shader(
+                self.shader, 'LINES', {"pos": norm_lines, "color": norm_colors})
 
         return
 
@@ -273,7 +301,7 @@ class ABNContainer:
                 self.shader, 'POINTS', {"pos": list(points[act_mask]), "color": list(po_colors[act_mask])})
         else:
             self.batch_po = batch_for_shader(
-                self.point_shader, 'POINTS', {"pos": list(points), "size": list(sizes), "color": list(po_colors)})
+                self.point_shader, 'POINTS', {"pos": points, "size": sizes, "color": po_colors})
 
         #
         #
@@ -297,16 +325,18 @@ class ABNContainer:
             if self.draw_weights:
                 t_colors[filt_mask] = w_cols
 
-            tri_colors = np.array(list(zip(t_colors, t_colors, t_colors)))
-            tri_colors.shape = [tris.shape[0]*3, 4]
-
-            tris.shape = [tris.shape[0]*3, 3]
+            tri_colors = np.repeat(t_colors[:, np.newaxis, :], 3, axis=1).reshape(-1, 4)
+            tris = tris.reshape(-1, 3)
 
             if self.alt_shader:
                 tri_colors[:, [0, 1, 2]] *= self.brightness
 
-        self.batch_tri = batch_for_shader(
-            self.shader, 'TRIS', {"pos": list(tris), "color": list(tri_colors)})
+        if self.alt_shader:
+            self.batch_tri = batch_for_shader(
+                self.shader, 'TRIS', {"pos": list(tris), "color": list(tri_colors)})
+        else:
+            self.batch_tri = batch_for_shader(
+                self.shader, 'TRIS', {"pos": tris, "color": tri_colors})
 
         #
         #
@@ -332,20 +362,24 @@ class ABNContainer:
 
         #
 
+        # Auto-scale normals based on object bounding box (5% of longest edge)
+        if self.po_coords is not None and self.po_coords.shape[0] > 0:
+            bb_dims = np.ptp(self.po_coords, axis=0)
+            bb_edge = float(np.max(bb_dims))
+            scale_base = max(bb_edge * 0.1, 1e-6)
+        else:
+            scale_base = 1.0
+        ns = self.normal_scale * scale_base
+
+        rot_mat = self.matrix[:3, :3].T
         if self.scale_selection:
-            world_norms = po_cos + \
-                (po_norms * 0.333 * self.normal_scale) @ self.matrix[:3, :3].T
+            world_norms = po_cos + (po_norms * (0.333 * ns)) @ rot_mat
 
             if exclude_active == False:
-                world_norms[sel_mask] = po_cos[sel_mask] + \
-                    (po_norms[sel_mask] * 0.666 *
-                        self.normal_scale) @ self.matrix[:3, :3].T
-                world_norms[act_mask] = po_cos[act_mask] + \
-                    (po_norms[act_mask] *
-                        self.normal_scale) @ self.matrix[:3, :3].T
+                world_norms[sel_mask] = po_cos[sel_mask] + (po_norms[sel_mask] * (0.666 * ns)) @ rot_mat
+                world_norms[act_mask] = po_cos[act_mask] + (po_norms[act_mask] * ns) @ rot_mat
         else:
-            world_norms = po_cos + \
-                (po_norms * self.normal_scale) @ self.matrix[:3, :3].T
+            world_norms = po_cos + (po_norms * ns) @ rot_mat
 
         n_colors = np.array([self.rcol_normal]*po_cos.shape[0])
         n_colors.shape = [po_cos.shape[0], 4]
@@ -361,11 +395,13 @@ class ABNContainer:
             world_norms = world_norms[sel_mask]
             n_colors = n_colors[sel_mask]
 
-        norms = np.array(list(zip(po_cos, world_norms)))
-        norms.shape = [po_cos.shape[0] * 2, 3]
+        norms = np.empty((po_cos.shape[0] * 2, 3), dtype=np.float32)
+        norms[0::2] = po_cos
+        norms[1::2] = world_norms
 
-        norm_colors = np.array(list(zip(n_colors, n_colors)))
-        norm_colors.shape = [n_colors.shape[0] * 2, 4]
+        norm_colors = np.empty((n_colors.shape[0] * 2, 4), dtype=np.float32)
+        norm_colors[0::2] = n_colors
+        norm_colors[1::2] = n_colors
 
         if self.alt_shader:
             norm_colors[:, [0, 1, 2]] *= self.brightness
