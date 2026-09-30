@@ -12,6 +12,8 @@ def load_handler(dummy):
 
     addon_prefs.use_n_panel = addon_prefs.use_n_panel
 
+    return
+
 
 def update_panel(self, context):
 
@@ -47,8 +49,6 @@ class ABN_OT_switch_panel_loc(Operator):
     val: BoolProperty(default=True)
 
     def execute(self, context):
-        scn = context.scene
-        aobj = context.active_object
 
         addon_prefs = bpy.context.preferences.addons[__package__.split('.')[
             0]].preferences
@@ -69,7 +69,6 @@ class ABN_PT_abnormal_panel(Panel):
 
     def draw(self, context):
         layout = self.layout
-        scn = context.scene
         data = bpy.data
 
         addon_prefs = bpy.context.preferences.addons[__package__.split('.')[
@@ -98,6 +97,14 @@ class ABN_PT_abnormal_panel(Panel):
             row.prop_search(addon_prefs, 'vcol', ob.data,
                             'vertex_colors', text='Vertex Color')
             row.alignment = 'CENTER'
+
+            # 顶点色属性检测：显示当前模型有多少个顶点色数据
+            if ob.type == 'MESH':
+                total = len(ob.data.color_attributes)
+                row = layout.row(align=True)
+                row.alignment = 'CENTER'
+                row.scale_y = 0.8
+                row.label(text=f"Color Attributes: {total}")
 
         row = layout.row(align=True)
         row.alignment = 'CENTER'
@@ -161,6 +168,9 @@ class ABN_PT_abnormal_panel(Panel):
 
 def register():
     bpy.utils.register_class(ABN_OT_switch_panel_loc)
+    ABN_PT_abnormal_panel.bl_category = 'BNPR Abnormal'
+    ABN_PT_abnormal_panel.bl_region_type = 'UI'
+    ABN_PT_abnormal_panel.menu_remove()
     bpy.utils.register_class(ABN_PT_abnormal_panel)
     bpy.app.handlers.load_post.append(load_handler)
     return

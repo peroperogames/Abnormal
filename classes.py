@@ -13,8 +13,16 @@ class ABNContainer:
         if alt_shader:
             self.create_alt_shader()
         else:
-            self.create_shader()
-            self.create_point_shader()
+            try:
+                self.create_shader()
+                self.create_point_shader()
+            except Exception as exc:
+                # Some Blender/platform combinations reject raw GPUShader GLSL.
+                # Fall back to the built-in color shader instead of aborting edit mode.
+                print('ABNormal: custom GPU shader compile failed, using built-in fallback shader.')
+                print(exc)
+                self.alt_shader = True
+                self.create_alt_shader()
 
         self.matrix = np.array(mat)
 
@@ -22,6 +30,10 @@ class ABNContainer:
         self.normal_scale = 1.0
         self.brightness = 1.0
         self.size = 1.0
+        
+        self.totalOutline_width = 0.05
+        self.outline_scale = 0.1 
+        self.z_offset = 0
 
         self.draw_tris = False
         self.draw_only_selected = False
@@ -41,6 +53,10 @@ class ABNContainer:
         self.og_norms = None
         self.new_norms = None
         self.cache_norms = None
+
+        # 存储顶点色数据来做为法线方向数据
+        self.color_norms = None
+        self.custom_norms = None
 
         self.hide_status = None
         self.sel_status = None
@@ -70,9 +86,10 @@ class ABNContainer:
         self.color_po_zero_weight = (0.66, 1.0, 1.0, 1.0)
         self.color_po_full_weight = (0.0, 1.0, 1.0, 1.0)
 
-        self.color_normal = (0.83, 0.3, 0.4, 1.0)
-        self.color_normal_sel = (0.83, 0.7, 0.9, 1.0)
-        self.color_normal_act = (0.0, 0.0, 0.9, 1.0)
+        self.color_normal = (0, 1.0, 1.0, 0.3)
+        # hsv的绿色
+        self.color_normal_sel = (0.333, 1.0, 1.0, 1.0)
+        self.color_normal_act = (0.333, 1.0, 1.0, 1.0)
 
         self.update_color_render()
         return
@@ -169,9 +186,11 @@ class ABNContainer:
             self.shader, 'LINES', {"pos": [], "color": []})
         return
 
+    # 更新被拖拽修改的顶点的数据
     def update_active(self):
         po_cos = self.loop_coords[self.sel_status]
         po_norms = self.new_norms[self.sel_status]
+
         act_status = self.act_status[self.sel_status]
         filt_mask = self.filter_mask[self.sel_status]
         weight_mask = self.filter_weights[self.sel_status][filt_mask]
@@ -195,7 +214,7 @@ class ABNContainer:
         cols.shape = [po_cos.shape[0], 4]
         cols[act_status] = self.rcol_normal_act
 
-        # Draw filter weights on norms
+        # Draw cc on norms
         if self.draw_weights:
             w_cols = np.zeros(filt_mask.nonzero()[0].size * 4,
                               dtype=np.float32).reshape(-1, 4)
@@ -217,14 +236,17 @@ class ABNContainer:
         if self.alt_shader:
             norm_colors[:, [0, 1, 2]] *= self.brightness
 
-        #
-
+        # 获取到被拖拽顶点数据的法线数据，存入准备被绘制的地方
         self.batch_active_normal = batch_for_shader(
             self.shader, 'LINES', {"pos": list(norm_lines), "color": list(norm_colors)})
 
         return
 
+    # 更新静态顶点数据
     def update_static(self, exclude_active=False):
+
+        #print("绘制法线")
+
         # POINTS
         # all points are static
         sel_mask = self.sel_status[~self.hide_status]
@@ -272,10 +294,6 @@ class ABNContainer:
             self.batch_po = batch_for_shader(
                 self.point_shader, 'POINTS', {"pos": list(points), "size": list(sizes), "color": list(po_colors)})
 
-        #
-        #
-        #
-
         # LOOP TRIS
         # all loop tris are static if used
         tris = []
@@ -305,10 +323,6 @@ class ABNContainer:
         self.batch_tri = batch_for_shader(
             self.shader, 'TRIS', {"pos": list(tris), "color": list(tri_colors)})
 
-        #
-        #
-        #
-
         # NORMALS
         # only non selected loop normals are static if exclude_active is true otherwise all loop normals are static
         if exclude_active:
@@ -325,6 +339,7 @@ class ABNContainer:
             act_mask = []
         else:
             po_cos = self.loop_coords[~self.hide_status]
+
             po_norms = self.new_norms[~self.hide_status]
 
         #
@@ -358,6 +373,7 @@ class ABNContainer:
             world_norms = world_norms[sel_mask]
             n_colors = n_colors[sel_mask]
 
+        # 计算法线数据
         norms = np.array(list(zip(po_cos, world_norms)))
         norms.shape = [po_cos.shape[0] * 2, 3]
 
@@ -367,6 +383,7 @@ class ABNContainer:
         if self.alt_shader:
             norm_colors[:, [0, 1, 2]] *= self.brightness
 
+        # 存储待被绘制的法线数据
         self.batch_normal = batch_for_shader(
             self.shader, 'LINES', {"pos": list(norms), "color": list(norm_colors)})
 
@@ -386,6 +403,7 @@ class ABNContainer:
         self.rcol_normal_act = hsv_to_rgb_list(self.color_normal_act)
         return
 
+    # 绘制方法
     def draw(self):
         matrix = bpy.context.region_data.perspective_matrix
 
@@ -436,6 +454,7 @@ class ABNContainer:
             # self.point_shader.uniform_float("color", po_color)
             self.batch_po.draw(self.point_shader)
 
+            # 没有拖拽的法线方向绘制
             # Static Normals
             self.shader.bind()
             self.shader.uniform_float("viewProjectionMatrix", matrix)
@@ -444,6 +463,7 @@ class ABNContainer:
             # self.shader.uniform_float("color", line_color)
             self.batch_normal.draw(self.shader)
 
+            # 拖拽中的法线方向绘制
             # Active Normals
             self.shader.bind()
             self.shader.uniform_float("viewProjectionMatrix", matrix)
@@ -489,6 +509,17 @@ class ABNContainer:
         self.draw_tris = status
         return
 
+    def set_totalOutline_width(self,status):
+        self.totalOutline_width = status
+        return
+
+    def set_outine_scale(self, status):
+        self.outline_scale = status
+        return
+
+    def set_z_offset(self, status):
+        self.z_offset = status
+        return
     #
     #
 

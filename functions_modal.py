@@ -1,4 +1,5 @@
 import bpy
+import cProfile
 from mathutils import Vector, Matrix
 from mathutils.bvhtree import BVHTree
 from mathutils.geometry import intersect_line_plane, intersect_point_tri_2d
@@ -10,7 +11,6 @@ from .functions_drawing import *
 from .functions_modal_keymap import *
 from .classes import *
 from .keymap import addon_keymaps
-
 
 def match_loops_vecs(source_vecs, target_vecs, target_inds):
     #
@@ -35,10 +35,6 @@ def match_loops_vecs(source_vecs, target_vecs, target_inds):
     return target_inds[indeces, sort]
 
 
-#
-#
-
-
 def set_new_normals(modal):
     modal._object.data.edges.foreach_set(
         'use_edge_sharp', modal._container.og_sharp)
@@ -49,8 +45,11 @@ def set_new_normals(modal):
             1.0-modal._container.filter_weights[:, None]) + modal._container.new_norms * modal._container.filter_weights[:, None]
 
     # Get the scale factor to normalized new normals
-    scale = 1 / np.sqrt(np.sum(np.square(modal._container.new_norms), axis=1))
-    modal._container.new_norms = modal._container.new_norms*scale[:, None]
+    magnitudes_sq = np.sum(np.square(modal._container.new_norms), axis=1)
+    scale = np.ones_like(magnitudes_sq)
+    non_zero_mask = magnitudes_sq > 1e-10  # 使用小阈值避免数值问题
+    scale[non_zero_mask] = 1 / np.sqrt(magnitudes_sq[non_zero_mask])
+    modal._container.new_norms = modal._container.new_norms * scale[:, None]
 
     if modal._mirror_x:
         sel_norms = modal._container.new_norms[modal._container.sel_status]
@@ -66,8 +65,29 @@ def set_new_normals(modal):
         modal._container.new_norms[modal.mir_loops_z[modal._container.sel_status]] = sel_norms
 
     # modal._container.new_norms.shape = [len(modal._object.data.loops), 3]
-    modal._object.data.normals_split_custom_set(modal._container.new_norms)
+    # 将法线数据应用到模型上的方法
+    # 不用将修改后的法线数据存入到模型法线中，而是用来计算顶点色再存入模型中
+    # modal._object.data.normals_split_custom_set(modal._container.new_norms)
 
+    # print("设置法线数据")
+
+    # 获取网格对象
+    mesh = modal._object.data
+    mesh.calc_normals_split()
+
+    loops = mesh.loops
+
+    # 创建一个自定义原始法线参数用于存储原始法线数据
+    customNormal_attr = mesh.attributes.get("CustomNormal")
+    if not customNormal_attr:
+        customNormal_attr = mesh.attributes.new(name="CustomNormal",type ='FLOAT_VECTOR', domain = 'CORNER')
+
+    # 批量设置自定义法线数据
+    custom_normal_data = customNormal_attr.data
+    for i in range(len(loops)):
+        custom_normal_data[i].vector = modal._container.new_norms[i]
+
+    # 重新绘制，刷新界面
     modal.redraw = True
     return
 
@@ -237,7 +257,6 @@ def average_selected_normals(modal):
     add_to_undostack(modal, 1)
     return
 
-
 def smooth_normals(modal, fac):
 
     sel_pos = get_selected_points(modal, any_selected=True)
@@ -251,8 +270,7 @@ def smooth_normals(modal, fac):
         conn_norms[modal._container.vert_link_ls[conn_pos] < 0] = np.nan
         conn_norms[conn_pos < 0] = np.nan
         conn_norms = np.nanmean(conn_norms, axis=(1, 2))[:, np.newaxis]
-        conn_norms = modal._container.new_norms[sel_loops] * (
-            1.0-fac*modal._smooth_strength) + conn_norms*(fac*modal._smooth_strength)
+        conn_norms = modal._container.new_norms[sel_loops] * (1.0-fac*modal._smooth_strength) + conn_norms*(fac*modal._smooth_strength)
 
         conn_norms = conn_norms[sel_mask]
 
@@ -531,17 +549,133 @@ def translate_axis_side(modal):
     return side
 
 
+def cleanup_other_color_attributes(mesh):
+    """删除除了 NormalColor 以外的所有顶点色属性，只保留插件写入的法线颜色"""
+    if not hasattr(mesh, 'color_attributes'):
+        return
+    to_remove = [attr.name for attr in mesh.color_attributes if attr.name != "NormalColor"]
+    if to_remove:
+        for name in to_remove:
+            try:
+                mesh.color_attributes.remove(mesh.color_attributes[name])
+            except Exception as e:
+                print(f"移除多余颜色属性 [{name}] 失败: {e}")
+        print(f"已清理多余顶点色属性: {to_remove}")
+
+
+def calc_loop_tangents_safe(mesh, uv_name=None):
+    """安全计算每个 loop 的切线和副切线符号，兼容含 n-gon（5边+多边形）的网格。
+
+    Blender 的 mesh.calc_tangents() 内部基于三角化计算切线，其实现只完整支持
+    三角形和四边形面；当网格中存在 5 边及以上的多边形（n-gon）时会直接报错。
+    此函数在检测到 n-gon 时，会临时三角化网格副本计算切线，再通过顶点索引
+    映射回原网格的 loop，保持原网格拓扑不变。
+
+    返回:
+        tangents: (loop_amnt*3,) numpy float32 数组，每个 loop 的切线
+        signs:    (loop_amnt,) numpy float32 数组，每个 loop 的副切线符号
+    """
+    loop_amnt = len(mesh.loops)
+    has_ngon = any(p.loop_total > 4 for p in mesh.polygons)
+
+    if not has_ngon:
+        # 没有 n-gon，直接使用 Blender 原生切线计算
+        if uv_name and uv_name in mesh.uv_layers:
+            mesh.calc_tangents(uvmap=uv_name)
+        else:
+            mesh.calc_tangents()
+        tangents = np.zeros(loop_amnt * 3, dtype=np.float32)
+        mesh.loops.foreach_get("tangent", tangents)
+        signs = np.zeros(loop_amnt, dtype=np.float32)
+        mesh.loops.foreach_get("bitangent_sign", signs)
+        return tangents, signs
+
+    # 有 n-gon：临时三角化网格副本计算切线，再映射回原 loop
+    import bmesh
+    from collections import defaultdict
+
+    temp_mesh = mesh.copy()
+    bm = bmesh.new()
+    bm.from_mesh(temp_mesh)
+    bmesh.ops.triangulate(bm, faces=bm.faces, quad_method='FIXED', ngon_method='BEAUTY')
+    bm.to_mesh(temp_mesh)
+    bm.free()
+
+    if uv_name and uv_name in temp_mesh.uv_layers:
+        temp_mesh.calc_tangents(uvmap=uv_name)
+    else:
+        temp_mesh.calc_tangents()
+
+    tri_loop_amnt = len(temp_mesh.loops)
+    tri_tangents = np.zeros(tri_loop_amnt * 3, dtype=np.float32)
+    temp_mesh.loops.foreach_get("tangent", tri_tangents)
+    tri_signs = np.zeros(tri_loop_amnt, dtype=np.float32)
+    temp_mesh.loops.foreach_get("bitangent_sign", tri_signs)
+
+    # 建立 顶点索引 -> 三角化副本中 loop 列表 的映射（三角化不新增顶点，索引保持一致）
+    vert_to_loops = defaultdict(list)
+    for j, l in enumerate(temp_mesh.loops):
+        vert_to_loops[l.vertex_index].append(j)
+
+    tangents = np.zeros(loop_amnt * 3, dtype=np.float32)
+    signs = np.zeros(loop_amnt, dtype=np.float32)
+    for i, l in enumerate(mesh.loops):
+        j = vert_to_loops[l.vertex_index][0]
+        tangents[i * 3:i * 3 + 3] = tri_tangents[j * 3:j * 3 + 3]
+        signs[i] = tri_signs[j]
+
+    bpy.data.meshes.remove(temp_mesh)
+    return tangents, signs
+
+
+def triangulate_ngons(mesh):
+    """只三角化网格中的 n-gon（5边及以上）面，三角形和四边形面保持不动。
+
+    游戏引擎（如 Unity）导入时会对 n-gon 自动三角化，拆分后产生独立的
+    三角形顶点，导致 Blender 的 per-corner 切线空间数据与引擎顶点无法
+    一一对应，描边效果出错。提前只三角化 n-gon 面，能让顶点数据完全对齐引擎。
+
+    返回: 是否执行了三角化
+    """
+    if mesh is None:
+        return False
+
+    ngon_count = sum(1 for p in mesh.polygons if p.loop_total > 4)
+    if ngon_count == 0:
+        return False
+
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    # 只选择 n-gon 面，三角形/四边形不处理
+    faces = [f for f in bm.faces if len(f.verts) > 4]
+    if faces:
+        bmesh.ops.triangulate(bm, faces=faces, quad_method='FIXED', ngon_method='BEAUTY')
+        bm.to_mesh(mesh)
+        mesh.update()
+    bm.free()
+    print(f"已自动三角化 {ngon_count} 个多边形面（n-gon），保证描边数据与引擎对齐")
+    return True
+
+
 #
-# MODAL
+# MODAL 缓存顶点数据的方法(初始化的地方)
 #
 def cache_point_data(modal):
+    # 保存当前模式状态
+    # modal.mode_state = ModeState()
+    # modal.mode_state.save(bpy.context)
+
     modal._object.data.calc_normals_split()
 
     vert_amnt = len(modal._object.data.vertices)
     edge_amnt = len(modal._object.data.edges)
     loop_amnt = len(modal._object.data.loops)
     face_amnt = len(modal._object.data.polygons)
-
+    mesh = modal._object.data
+    # 安全计算切线（兼容含 n-gon 的网格）
+    calc_loop_tangents_safe(mesh, None)
+    
     modal._container.og_sharp = np.zeros(edge_amnt, dtype=bool)
     modal._object.data.edges.foreach_get(
         'use_edge_sharp', modal._container.og_sharp)
@@ -549,12 +683,115 @@ def cache_point_data(modal):
     modal._container.og_seam = np.zeros(edge_amnt, dtype=bool)
     modal._object.data.edges.foreach_get('use_seam', modal._container.og_seam)
 
+    # 初始化获取到法线数据，存入到指定的数组中，
     modal._container.og_norms = np.zeros(loop_amnt*3, dtype=np.float32)
     modal._object.data.loops.foreach_get('normal', modal._container.og_norms)
     modal._container.og_norms.shape = [loop_amnt, 3]
 
-    modal._container.new_norms = modal._container.og_norms.copy()
-    modal._container.cache_norms = modal._container.og_norms.copy()
+    # 获取或创建自定义属性（域为 CORNER，对应每个循环）
+    customNormal_attr = mesh.attributes.get("CustomNormal")
+    if not customNormal_attr:
+        # 创建属性（类型为 FLOAT_VECTOR，域为 CORNER）
+        customNormal_attr = mesh.attributes.new(name="CustomNormal",type='FLOAT_VECTOR',domain='CORNER')
+
+    # 初始化 NumPy 数组
+    modal._container.custom_norms = np.zeros(loop_amnt * 3, dtype=np.float32)
+    # 从属性中批量读取数据（关键步骤）
+    # 使用 data.foreach_get 直接操作底层数据，把CustonNormal数据存入到自定义的custom_norms列表中
+    customNormal_attr.data.foreach_get("vector", modal._container.custom_norms)
+    # 重塑数组形状为 [loop_amnt, 3]
+    modal._container.custom_norms.shape = (loop_amnt, 3)
+
+    # 检查是否存在NaN值
+    has_nan = np.isnan(modal._container.custom_norms).any()
+    all_zero = np.all(modal._container.custom_norms == 0)
+
+    if has_nan or all_zero:
+        # 使用原始法线数据
+        # 同时把原始法线数据复制到customNormal上，防止第一次启用编辑的时候没有绘制出描边效果
+        modal._container.custom_norms = modal._container.og_norms.copy()
+        # customNormal_attr.data
+        # 循环存储数据
+        for i, loop in enumerate(modal._object.data.loops):
+            customNormal_attr.data[i].vector = modal._container.og_norms.copy()[i]
+
+        modal._container.new_norms = modal._container.og_norms.copy()
+        modal._container.cache_norms = modal._container.og_norms.copy()
+    else:
+        # 使用自定义法线数据
+        modal._container.new_norms = modal._container.custom_norms.copy()
+        modal._container.cache_norms = modal._container.custom_norms.copy()
+
+    # 清理多余的顶点色属性（只保留插件写入的 NormalColor）
+    if modal._display_prefs.cleanup_other_colors:
+        cleanup_other_color_attributes(mesh)
+
+    # 在这里同时也设置好顶点色
+    color_attr = mesh.color_attributes.get("NormalColor")
+    # 检查属性是否存在，且类型是否为 FLOAT_COLOR
+    if color_attr and color_attr.data_type != 'FLOAT_COLOR':
+        mesh.color_attributes.remove(color_attr)
+        color_attr = None
+
+    if not color_attr:
+        color_attr = mesh.color_attributes.new(name="NormalColor", type='FLOAT_COLOR', domain='CORNER')
+        # 确保数据被初始化，设置默认值
+        for loop in mesh.loops:
+            color_attr.data[loop.index].color = (0.5, 0.5, 0.5, 1.0)
+
+    uv_name = None
+    if len(mesh.uv_layers) > 0:
+        uv_layer = mesh.uv_layers.active
+        if uv_layer is None and "UVMap" in mesh.uv_layers:
+            uv_layer = mesh.uv_layers["UVMap"]
+        if uv_layer is None:
+            uv_layer = mesh.uv_layers[0]
+        uv_name = uv_layer.name
+
+    loops = mesh.loops
+    loop_amnt = len(loops)
+    data_len = len(color_attr.data)
+    if data_len != loop_amnt:
+        mesh.color_attributes.remove(color_attr)
+        color_attr = mesh.color_attributes.new(name="NormalColor", type='FLOAT_COLOR', domain='CORNER')
+        data_len = len(color_attr.data)
+
+    loop_nors = np.zeros(loop_amnt * 3, dtype=np.float32)
+    loops.foreach_get("normal", loop_nors)
+    loop_nors.shape = (loop_amnt, 3)
+
+    # 安全计算切线（兼容含 n-gon 的网格）
+    loop_tans, bitan_sign = calc_loop_tangents_safe(mesh, uv_name)
+    loop_tans.shape = (loop_amnt, 3)
+
+    nor_len = np.linalg.norm(loop_nors, axis=1)
+    nor_len[nor_len == 0] = 1.0
+    loop_nors = loop_nors / nor_len[:, None]
+
+    tan_len = np.linalg.norm(loop_tans, axis=1)
+    tan_len[tan_len == 0] = 1.0
+    loop_tans = loop_tans / tan_len[:, None]
+
+    loop_bitans = bitan_sign[:, None] * np.cross(loop_nors, loop_tans)
+    bitan_len = np.linalg.norm(loop_bitans, axis=1)
+    bitan_len[bitan_len == 0] = 1.0
+    loop_bitans = loop_bitans / bitan_len[:, None]
+
+    cur_norms = modal._container.new_norms[:loop_amnt].astype(np.float32, copy=False)
+    ts_x = np.sum(cur_norms * loop_tans, axis=1)
+    ts_y = np.sum(cur_norms * loop_bitans, axis=1)
+    ts_z = np.sum(cur_norms * loop_nors, axis=1)
+
+    colors = np.empty((loop_amnt, 4), dtype=np.float32)
+    colors[:, 0] = ts_x * 0.5 + 0.5
+    colors[:, 1] = ts_y * 0.5 + 0.5
+    colors[:, 2] = ts_z * 0.5 + 0.5
+    colors[:, 3] = 1.0
+    colors[:, :3] = np.clip(colors[:, :3], 0.0, 1.0)
+
+    color_attr.data.foreach_set("color", colors[:data_len].ravel())
+
+    # 同时也要处理描边参数数据和CustonNormal数据也要传递过来
 
     max_link_eds = max([len(v.link_edges) for v in modal._object_bm.verts])
     max_link_loops = max([len(v.link_loops) for v in modal._object_bm.verts])
@@ -705,7 +942,7 @@ def cache_point_data(modal):
                         loop_sel[loop.index] = True
 
     # Face selection
-    if bpy.context.tool_settings.mesh_select_mode[2]:
+    if bpy.context.tool_settings.mesh_select_mode[2]: 
         for f in modal._object_bm.faces:
             if f.select:
                 if modal._individual_loops:
@@ -721,7 +958,67 @@ def cache_point_data(modal):
     modal._container.act_status = np.array(loop_act, dtype=bool)
 
     cache_mirror_data(modal)
+
+    add_geometry_nodes_outline(modal)
+
     return
+
+# 获取到预设资源路径
+def find_asset_library_path(library_name="Outline Node"):
+    """获取指定名称的资产库路径"""
+    for lib in bpy.context.preferences.filepaths.asset_libraries:
+        if lib.name == library_name:
+            return lib.path
+    return None
+
+# 获取到预设几何节点
+def load_node_group_from_asset_lib(asset_file="OutlinePlus.blend", node_group_name="OutlinePlus"):
+    """优先使用本地已存在的节点组，避免重复加载"""
+    # 先检查本地是否存在
+    existing_group = bpy.data.node_groups.get(node_group_name)
+    if existing_group:
+        return existing_group
+    
+    # 若不存在则从资产库加载
+    asset_lib_path = find_asset_library_path()
+    if not asset_lib_path:
+        print("未找到资产库路径")
+        return None
+        
+    blend_path = os.path.join(asset_lib_path, asset_file)
+    if not os.path.exists(blend_path):
+        print(f"资产文件不存在: {blend_path}")
+        return None
+
+    # 加载并返回节点组
+    with bpy.data.libraries.load(blend_path, link=False) as (data_src, data_dst):
+        if node_group_name in data_src.node_groups:
+            data_dst.node_groups = [node_group_name]
+    
+    return bpy.data.node_groups.get(node_group_name)
+
+
+# 从资产中获取到几何节点并添加到模型上的方法
+def add_geometry_nodes_outline(modal):
+    obj = modal._object
+    if not obj or obj.type != 'MESH':
+        return
+    
+    # 检查是否已存在该修改器
+    mod = next((m for m in obj.modifiers if m.type == 'NODES' and m.node_group and m.node_group.name == "OutlinePlus"), None)
+    if mod:
+        return
+    
+    # 确保节点组存在（优先复用本地）
+    outline_group = load_node_group_from_asset_lib()
+    if not outline_group:
+        print("加载几何节点组失败")
+        return
+    
+    # 创建新修改器
+    mod = obj.modifiers.new(name="OutlinePlus", type='NODES')
+    mod.node_group = outline_group
+    print("轮廓几何节点修改器已添加")
 
 
 def cache_mirror_data(modal):
@@ -807,7 +1104,6 @@ def init_nav_list(modal):
         if 'Pass Thru' in item.name:
             modal.nav_list.append(item)
     return
-
 
 def ob_data_structures(modal, ob):
     if ob.data.shape_keys is not None:
@@ -982,10 +1278,35 @@ def img_load(img_name, path):
 
     return img
 
-
+# 结束法线编辑操作
 def finish_modal(modal, restore):
+    print("结束编辑")
+
+    mesh = modal._object.data
+    # 安全计算切线（兼容含 n-gon 的网格）
+    calc_loop_tangents_safe(mesh, None)
+
+    # 恢复保存的模式状态
+    if hasattr(modal, 'mode_state') and modal.mode_state is not None:
+        modal.mode_state.restore(bpy.context)
+
+    # 将Blender语言切换回为中文
+    prefs = bpy.context.preferences
+    # 设置中文界面并启用翻译
+    prefs.view.language = 'zh_CN'              # 中文语言代码
+    prefs.view.use_translate_interface = True  # 启用界面翻译
+    prefs.view.use_translate_tooltips = True   # 启用工具提示翻译
+
+    # 保存偏好设置
     modal._behavior_prefs.rotate_gizmo_use = modal._use_gizmo
     modal._display_prefs.gizmo_size = modal._gizmo_size
+
+    modal._display_prefs.totalOutline_width = modal._totalOutline_width
+    modal._display_prefs.outline_width_multiplier = modal._outline_width_multiplier
+    modal._display_prefs.outline_width_multiplier_locked = modal._outline_width_multiplier_locked
+    modal._display_prefs.outline_scale = modal._outline_scale
+    modal._display_prefs.z_offset = modal._z_offset
+
     modal._display_prefs.normal_size = modal._normal_size
     modal._display_prefs.line_brightness = modal._line_brightness
     modal._display_prefs.point_size = modal._point_size
@@ -997,6 +1318,7 @@ def finish_modal(modal, restore):
     modal._display_prefs.ui_scale = modal._ui_scale
     modal._display_prefs.display_wireframe = modal._use_wireframe_overlay
 
+    # 还原3D视图的显示选项
     if bpy.context.area is not None:
         if bpy.context.area.type == 'VIEW_3D':
             for space in bpy.context.area.spaces:
@@ -1010,8 +1332,10 @@ def finish_modal(modal, restore):
 
     bpy.context.window.cursor_modal_set('DEFAULT')
 
+    # 清除绘制的句柄
     clear_drawing(modal)
 
+    # 如果为true则恢复对象法线数据
     if restore:
         ob = modal._object
         if ob.as_pointer() != modal._object_pointer:
@@ -1040,7 +1364,132 @@ def finish_modal(modal, restore):
 
     modal._object.select_set(True)
     bpy.context.view_layer.objects.active = modal._object
+
+    # 在这里添加上删除几何节点的操作
+    remove_geometry_nodes_outline(modal)
+
+    # 清理多余的顶点色属性（只保留插件写入的 NormalColor）
+    if modal._display_prefs.cleanup_other_colors:
+        cleanup_other_color_attributes(mesh)
+
+    # 在结束前再次写入法线数据到顶点色（以日志方式处理异常，不抛出错误）
+    try:
+        mesh = modal._object.data
+        color_attr = mesh.color_attributes.get("NormalColor")
+
+        # 确保属性类型始终为 FLOAT_COLOR
+        if color_attr and color_attr.data_type != 'FLOAT_COLOR':
+            mesh.color_attributes.remove(color_attr)
+            color_attr = None
+
+        if not color_attr:
+            # 创建使用 FLOAT_COLOR 类型的颜色属性
+            color_attr = mesh.color_attributes.new(name="NormalColor", type='FLOAT_COLOR', domain='CORNER')
+            # 确保数据被初始化，设置默认值
+            for loop in mesh.loops:
+                color_attr.data[loop.index].color = (0.5, 0.5, 0.5, 1.0)
+
+        if color_attr and len(color_attr.data) > 0:
+            mesh.calc_normals_split()
+            uv_name = mesh.uv_layers[0].name if len(mesh.uv_layers) > 0 else None
+
+            loops = mesh.loops
+            loop_amnt = len(loops)
+            data_len = len(color_attr.data)
+            if data_len != loop_amnt:
+                mesh.color_attributes.remove(color_attr)
+                color_attr = mesh.color_attributes.new(name="NormalColor", type='FLOAT_COLOR', domain='CORNER')
+                data_len = len(color_attr.data)
+
+            loop_nors = np.zeros(loop_amnt * 3, dtype=np.float32)
+            loops.foreach_get("normal", loop_nors)
+            loop_nors.shape = (loop_amnt, 3)
+
+            # 安全计算切线（兼容含 n-gon 的网格）
+            loop_tans, bitan_sign = calc_loop_tangents_safe(mesh, uv_name)
+            loop_tans.shape = (loop_amnt, 3)
+
+            nor_len = np.linalg.norm(loop_nors, axis=1)
+            nor_len[nor_len == 0] = 1.0
+            loop_nors = loop_nors / nor_len[:, None]
+
+            tan_len = np.linalg.norm(loop_tans, axis=1)
+            tan_len[tan_len == 0] = 1.0
+            loop_tans = loop_tans / tan_len[:, None]
+
+            loop_bitans = bitan_sign[:, None] * np.cross(loop_nors, loop_tans)
+            bitan_len = np.linalg.norm(loop_bitans, axis=1)
+            bitan_len[bitan_len == 0] = 1.0
+            loop_bitans = loop_bitans / bitan_len[:, None]
+
+            cur_norms = modal._container.new_norms[:loop_amnt].astype(np.float32, copy=False)
+            ts_x = np.sum(cur_norms * loop_tans, axis=1)
+            ts_y = np.sum(cur_norms * loop_bitans, axis=1)
+            ts_z = np.sum(cur_norms * loop_nors, axis=1)
+
+            colors = np.empty((loop_amnt, 4), dtype=np.float32)
+            colors[:, 0] = ts_x * 0.5 + 0.5
+            colors[:, 1] = ts_y * 0.5 + 0.5
+            colors[:, 2] = ts_z * 0.5 + 0.5
+            colors[:, 3] = 1.0
+            colors[:, :3] = np.clip(colors[:, :3], 0.0, 1.0)
+
+            color_attr.data.foreach_set("color", colors[:data_len].ravel())
+        else:
+            try:
+                modal.report({'INFO'}, "未找到 NormalColor 或颜色数据为空，已跳过写入")
+            except Exception:
+                print("未找到 NormalColor 或颜色数据为空，已跳过写入")
+    except Exception as e:
+        try:
+            modal.report({'WARNING'}, f"写入 NormalColor 失败：{e}")
+        except Exception:
+            print(f"写入 NormalColor 失败：{e}")
+
     return
+
+
+# 删除几何节点的方法
+def remove_geometry_nodes_outline(modal):
+    """安全移除几何节点修改器及关联数据"""
+    obj = modal._object
+    
+    # 防御性检查
+    if not obj or not hasattr(obj, 'modifiers') or obj.type != 'MESH':
+        return False
+
+    removed = False
+    modifiers_to_remove = []
+
+    # 第一阶段：收集需要移除的修改器
+    for mod in obj.modifiers:
+        if mod.type == 'NODES' and mod.node_group and "OutlinePlus" in mod.node_group.name:
+            modifiers_to_remove.append(mod)
+
+    # 第二阶段：实际移除操作
+    for mod in modifiers_to_remove:
+        node_group = mod.node_group
+        
+        try:
+            # 提前获取需要的信息
+            group_name = node_group.name if node_group else ""
+            obj.modifiers.remove(mod)
+            
+            # 安全清理节点组
+            if node_group and node_group.users == 0:
+                try:
+                    bpy.data.node_groups.remove(node_group)
+                    print(f"清理未使用节点组: {group_name}")
+                except Exception as e:
+                    print(f"清理节点组失败: {str(e)}")
+            
+            removed = True
+        except ReferenceError as e:
+            print(f"移除修改器时遇到引用错误: {str(e)}")
+        except Exception as e:
+            print(f"意外错误: {str(e)}")
+
+    return removed
 
 
 def restore_modifiers(modal):
@@ -1215,12 +1664,8 @@ def gizmo_click_init(modal, event, giz_status):
 
 
 def relocate_gizmo_panel(modal):
-    rco = view3d_utils.location_3d_to_region_2d(
-        modal.act_reg, modal.act_rv3d, modal._orbit_ob.location)
-
-    if rco is not None:
-        modal._gizmo_panel.set_new_position(
-            [rco[0]+modal.gizmo_reposition_offset[0], rco[1]+modal.gizmo_reposition_offset[1]], modal._window.dimensions)
+    # _gizmo_panel 已移除，Incremental Rotations 内容已移动到"法线方向"面板下
+    # 此函数保留以兼容其他代码，但不执行任何操作
     return
 
 
@@ -1228,7 +1673,7 @@ def gizmo_update_hide(modal, status):
     if modal._use_gizmo == False:
         status = False
 
-    modal._gizmo_panel.set_visibility(status)
+    # _gizmo_panel 已移除，只更新旋转gizmo的可见性
     modal._rot_gizmo.set_visibility(status)
     return
 
@@ -1315,7 +1760,7 @@ def sphereize_normals(modal):
         np.array(modal._target_emp.location), modal._object.matrix_world.inverted())
     local_cos = get_np_matrix_transformed_vecs(
         modal._container.loop_coords[modal._container.sel_status], modal._object.matrix_world.inverted())
-
+    
     cache_norms = modal._container.cache_norms[modal._container.sel_status]*(
         1.0-modal.target_strength)
     modal._container.new_norms[modal._container.sel_status] = (
@@ -1518,6 +1963,11 @@ def get_selectable_loops(modal):
     sel_ls[modal._container.hide_status] = True
     return (~sel_ls).nonzero()[0]
 
+
+def get_selected_loops(modal):
+    # 获取选中且未隐藏的循环索引
+    selected_visible = modal._container.sel_status & (~modal._container.hide_status)
+    return selected_visible.nonzero()[0]
 
 def get_selected_points(modal, any_selected=False):
     # Get indices of points that all connected loops are visible

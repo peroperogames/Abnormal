@@ -48,8 +48,7 @@ class ABN_OT_convert_vcol_to_norms(Operator):
         scn = context.scene
         aobj = context.active_object
 
-        addon_prefs = bpy.context.preferences.addons[__package__.split('.')[
-            0]].preferences
+        addon_prefs = bpy.context.preferences.addons[__package__.split('.')[0]].preferences
 
         if addon_prefs.vcol is not None and addon_prefs.vcol in aobj.data.vertex_colors:
             aobj.data.calc_normals_split()

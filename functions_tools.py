@@ -541,8 +541,9 @@ def ui_click(modal, context, event, keys, func_data):
             rco = view3d_utils.location_3d_to_region_2d(
                 modal.act_reg, modal.act_rv3d, modal._orbit_ob.location)
             if rco != None:
-                modal.gizmo_reposition_offset = [
-                    modal._gizmo_panel.position[0]-rco[0], modal._gizmo_panel.position[1]-rco[1]]
+                # _gizmo_panel 已移除，使用默认偏移值
+                if not hasattr(modal, 'gizmo_reposition_offset') or modal.gizmo_reposition_offset is None:
+                    modal.gizmo_reposition_offset = [0, 0]
 
             if panel_status[0] == 'NUMBER_BAR_TYPE':
                 modal._current_tool = modal._typing_tool
@@ -751,7 +752,6 @@ def reset_gizmo(modal, context, event, keys, func_data):
 
 
 def rotate_start(modal, context, event, keys, func_data):
-
     if modal._container.sel_status.any():
         avg_loc = np.mean(
             modal._container.loop_coords[modal._container.sel_status], axis=0)
@@ -1079,7 +1079,8 @@ def filter_clear(modal, context, event, keys, func_data):
 #
 # BOX SELECT FUNCS
 def box_sel_start(modal, context, event, keys, func_data):
-    modal._mode_cache.append(modal._mouse_reg_loc.copy())
+    modal._mode_cache.append(
+        [modal._mouse_reg_loc.copy(), modal._mouse_reg_loc.copy()])
     modal.box_selecting = True
     return
 

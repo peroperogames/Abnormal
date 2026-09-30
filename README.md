@@ -26,3 +26,4 @@ Documentation, tips and tricks: https://bnpr.gitbook.io/abnormal-wiki/
 3. Report the bug/issue via this link: https://github.com/bnpr/Abnormal/issues
 4. Please describe the bug with the final console print and propose a fix (if possible).
 
+飞书云文档地址：https://peropero.feishu.cn/wiki/CgYow2MyQikO84kHUm0cFTr3nIf

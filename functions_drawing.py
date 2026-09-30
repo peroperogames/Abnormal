@@ -23,19 +23,23 @@ def refresh_batches(modal, context):
     force_scene_update()
     return
 
-
+# 绘制法线的方法
 def draw_callback_3d(modal, context):
+    # print("绘制法线方向")
     clear_draw = False
 
     try:
+        # 如果没有选中模型则标记为false，清理绘制内容
         if modal._modal_running == False:
             clear_draw = True
 
+        # 配置OpenGL渲染环境
         bgl.glEnable(bgl.GL_BLEND)
         bgl.glEnable(bgl.GL_VERTEX_PROGRAM_POINT_SIZE)
         if modal._x_ray_mode == False:
             bgl.glEnable(bgl.GL_DEPTH_TEST)
 
+        # 这里就是绘制法线方向的方法 
         modal._container.draw()
 
         if len(modal.translate_draw_line) > 0:
@@ -76,7 +80,7 @@ def draw_callback_3d(modal, context):
         clear_draw = True
 
     if clear_draw:
-        print('Something is wrong, clear out 3D Draw Handler')
+        print('Something is wrong, 3D Draw Handler is being removed')
         dns = bpy.app.driver_namespace
         dc = dns.get("dh3d")
         try:
@@ -132,7 +136,7 @@ def draw_callback_2d(modal, context):
         clear_draw = True
 
     if clear_draw:
-        print('Something is wrong, clear out 2D Draw Handler')
+        print('Something is wrong, 2D Draw Handler is being removed')
         dns = bpy.app.driver_namespace
         dc = dns.get("dh2d")
         try:

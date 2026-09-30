@@ -9,6 +9,17 @@ class prefs(PropertyGroup):
     selected_scale: BoolProperty(default=True)
     draw_weights: BoolProperty(default=True)
     display_wireframe: BoolProperty(default=True)
+    
+    totalOutline_width : FloatProperty(default=0.05, min=0.0, max=5.0)
+    outline_width_multiplier: FloatProperty(default=0.45, min=0.01, max=1.0, 
+                                             description="Multiplier for Total OutlineWidth when applied to geometry nodes")
+    outline_width_multiplier_locked: BoolProperty(default=True, 
+                                                   description="Lock Outline Width Multiplier to prevent adjustment")
+    outline_scale: FloatProperty(default=0.1, min=0.01, max=1.0)
+    z_offset: FloatProperty(default=0,min=-1.0,max=1.0)
+    cleanup_other_colors: BoolProperty(default=True,
+                                       description="Remove all color attributes except NormalColor when starting/finishing normal editing")
+
     normal_size: FloatProperty(default=0.5, min=0.01, max=10.0)
     point_size: FloatProperty(default=1.0, min=.1, max=10.0)
     loop_tri_size: FloatProperty(default=0.75, min=0.0, max=1.0)
@@ -25,6 +36,8 @@ class prefs(PropertyGroup):
     copy_collapsed: BoolProperty(default=True)
     modes_collapsed: BoolProperty(default=True)
 
+    stroke_collapsed: BoolProperty(default=True)
+
 
 def label_row(path, prop, row, label):
     row.label(text=label)
@@ -40,6 +53,8 @@ def draw(preference, context, layout):
               layout.row(), 'Draw Filter Weights')
     label_row(preference.display, 'display_wireframe',
               layout.row(), 'Display Wireframe')
+    label_row(preference.display, 'cleanup_other_colors',
+              layout.row(), 'Cleanup Other Color Attributes')
     label_row(preference.display, 'normal_size',
               layout.row(), 'Normal Length')
     label_row(preference.display, 'point_size',
@@ -53,6 +68,10 @@ def draw(preference, context, layout):
 
     label_row(preference.display, 'display_collapsed',
               layout.row(), 'Viewport Settings menu collapsed')
+    
+    label_row(preference.display, 'stroke_collapsed',
+            layout.row(), 'Viewport Settings menu stroke_collapsed')
+
     label_row(preference.display, 'symmetry_collapsed',
               layout.row(), 'Symmetry menu collapsed')
     label_row(preference.display, 'alignment_collapsed',
