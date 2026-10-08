@@ -296,6 +296,8 @@ class ABN_OT_normal_editor_modal(Operator):
         self._selected_only = self._display_prefs.selected_only
         self._draw_weights = self._display_prefs.draw_weights
         self._selected_scale = self._display_prefs.selected_scale
+        self._show_original_norms = False
+        self._original_norms_edited = False
         self._individual_loops = self._behavior_prefs.individual_loops
         if self._display_prefs.ui_scale == 0.0:
             self._ui_scale = context.window.width/1920
@@ -389,6 +391,7 @@ class ABN_OT_normal_editor_modal(Operator):
         self._container.set_draw_only_selected(self._selected_only)
         self._container.set_draw_weights(self._draw_weights)
         self._container.set_draw_tris(self._individual_loops)
+        self._container.set_draw_original_norms(self._show_original_norms)
 
         # INITIALIZE POINT DATA
         cache_point_data(self)

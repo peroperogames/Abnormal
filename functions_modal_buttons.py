@@ -644,6 +644,10 @@ def init_ui_panels(modal, rw, rh, scale):
             bool.set_click_up_func(toggle_wireframe)
 
             row = boxx.add_row()
+            bool = row.add_bool(20, 'Show Original Normals', default=modal._show_original_norms)
+            bool.set_click_up_func(toggle_show_original_norms)
+
+            row = boxx.add_row()
             num = row.add_number(
                 20, 'Gizmo Size', modal._gizmo_size, 0, 10, 100, 1000)
             num.set_slide_factor(2)
@@ -978,6 +982,12 @@ def init_ui_panels(modal, rw, rh, scale):
             but.set_click_up_func(set_direction)
             but.add_tooltip_text_line(
                 'Set selected normals to pointing towards the inside face direction')
+
+            row = boxx.add_row()
+            but = row.add_button(20, 'Set Original Outside')
+            but.set_click_up_func(set_original_outside)
+            but.add_tooltip_text_line(
+                'Set original normals of selected vertices to point outside (modifies the model normals)')
 
             row = boxx.add_row()
             but = row.add_button(20, 'Reset Vectors')
@@ -1658,6 +1668,14 @@ def toggle_draw_weights(ui_item, arguments):
     return
 
 
+def toggle_show_original_norms(ui_item, arguments):
+    arguments[0]._show_original_norms = ui_item.bool_val
+    arguments[0]._container.set_draw_original_norms(
+        arguments[0]._show_original_norms)
+    arguments[0].redraw = True
+    return
+
+
 def toggle_mirror_axis(ui_item, arguments):
     if ui_item.custom_id[0] == 0:
         arguments[0]._mirror_x = ui_item.bool_val
@@ -2002,6 +2020,13 @@ def set_direction(ui_item, arguments):
             set_outside_inside(arguments[0], 1)
         if ui_item.custom_id[0] == 1:
             set_outside_inside(arguments[0], -1)
+
+    return
+
+
+def set_original_outside(ui_item, arguments):
+    if arguments[0]._container.sel_status.any():
+        set_original_normals_outside(arguments[0])
 
     return
 

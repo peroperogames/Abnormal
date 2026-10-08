@@ -39,6 +39,7 @@ class ABNContainer:
         self.draw_only_selected = False
         self.draw_weights = True
         self.scale_selection = True
+        self.draw_original_norms = False
 
         # NP ARRAYS
         self.og_sharp = None
@@ -325,6 +326,7 @@ class ABNContainer:
 
         # NORMALS
         # only non selected loop normals are static if exclude_active is true otherwise all loop normals are static
+        static_norms = self.og_norms if self.draw_original_norms else self.new_norms
         if exclude_active:
             non_sel_status = np.ones(self.loop_coords.shape[0], dtype=bool)
             non_sel_status[self.sel_status] = False
@@ -334,13 +336,13 @@ class ABNContainer:
             filt_mask = filt_mask[non_sel_status]
 
             po_cos = self.loop_coords[~self.hide_status][non_sel_status]
-            po_norms = self.new_norms[~self.hide_status][non_sel_status]
+            po_norms = static_norms[~self.hide_status][non_sel_status]
             sel_mask = []
             act_mask = []
         else:
             po_cos = self.loop_coords[~self.hide_status]
 
-            po_norms = self.new_norms[~self.hide_status]
+            po_norms = static_norms[~self.hide_status]
 
         #
 
@@ -499,6 +501,10 @@ class ABNContainer:
 
     def set_draw_only_selected(self, status):
         self.draw_only_selected = status
+        return
+
+    def set_draw_original_norms(self, status):
+        self.draw_original_norms = status
         return
 
     def set_draw_weights(self, status):

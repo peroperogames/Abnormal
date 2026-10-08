@@ -292,7 +292,7 @@ def flip_normals(modal):
     return
 
 
-def set_outside_inside(modal, direction):
+def _set_outside_inside(modal, direction, norms):
 
     if modal._object_smooth:
         sel_pos = get_selected_points(modal, any_selected=True)
@@ -306,21 +306,37 @@ def set_outside_inside(modal, direction):
 
         f_norms[~loop_status] = np.nan
         f_norms = np.nanmean(f_norms, axis=1)[:, np.newaxis]
-        new_norms = modal._container.new_norms[sel_loops]
+        new_norms = norms[sel_loops]
 
         new_norms[:] = f_norms
 
         sel_loops = sel_loops[loop_status]
         new_norms = new_norms[loop_status] * direction
 
-        modal._container.new_norms[sel_loops] = new_norms
+        norms[sel_loops] = new_norms
 
     else:
-        modal._container.new_norms[modal._container.sel_status] = modal._container.face_normals[
+        norms[modal._container.sel_status] = modal._container.face_normals[
             modal._container.loop_faces[modal._container.sel_status]]
+
+    return
+
+
+def set_outside_inside(modal, direction):
+    _set_outside_inside(modal, direction, modal._container.new_norms)
 
     set_new_normals(modal)
     add_to_undostack(modal, 1)
+    return
+
+
+def set_original_normals_outside(modal):
+    _set_outside_inside(modal, 1, modal._container.og_norms)
+
+    # 将修改后的原始法线写回模型本身
+    modal._object.data.normals_split_custom_set(modal._container.og_norms)
+    modal._original_norms_edited = True
+    modal.redraw = True
     return
 
 
@@ -1445,6 +1461,13 @@ def finish_modal(modal, restore):
             modal.report({'WARNING'}, f"写入 NormalColor 失败：{e}")
         except Exception:
             print(f"写入 NormalColor 失败：{e}")
+
+    # 如果编辑过原始法线，退出时把修改后的原始法线写回模型
+    if getattr(modal, '_original_norms_edited', False):
+        try:
+            modal._object.data.normals_split_custom_set(modal._container.og_norms)
+        except Exception as e:
+            print(f"写回原始法线失败：{e}")
 
     return
 
